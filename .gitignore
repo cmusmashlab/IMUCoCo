@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+exp_out/
+saved_checkpoints/
+smpl/
+*.pkl
+*.pth
+*.log
+*.ini
+*.json
+error.log
+vertex_sampling_distribution_analysis.json
+
+# Data directories (users should set these up themselves)
+# raw/
+# parsed/
+

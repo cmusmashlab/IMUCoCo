@@ -1,0 +1,166 @@
+<div align="center">
+
+<h1>🥥 IMUCoCo: Enabling Flexible On-Body IMU Placement for Human Pose Estimation and Activity Recognition</h1>
+<div>
+    <a href='https://haozheee.github.io/' target='_blank'>Haozhe Zhou</a>&emsp;
+    <a href='https://rikky0611.github.io/' target='_blank'>Riku Arakawa</a>&emsp;
+    <a href='https://www.synergylabs.org/yuvraj/' target='_blank'>Yuvraj Agarwal</a>&emsp;
+    <a href='http://www.mayankgoel.com/' target='_blank'>Mayank Goel</a>&emsp;
+</div>
+<div>
+    Carnegie Mellon University
+</div>
+<h4 align="center">
+  This is the implementation of our paper IMUCoCo at UIST 2025. 
+  <a href="https://smashlab.io/pdfs/imucoco.pdf" target='_blank'>[Paper]</a>
+</h4>
+</div>
+
+
+
+## Environment Setup
+
+We tested our code on Ubuntu 22.04 LTS with `Python 3.10.13`, `Pytorch 2.9.0` with `cuda 12.8`, other dependencies are specified in `requirements.txt`.
+
+```bash
+conda create -n imucoco310 python=3.10.13
+conda activate imucoco310
+pip install torch==2.9.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+```
+
+**Note**: The PyTorch installation above is for CUDA 12.8. If you have a different CUDA version, please adjust the PyTorch installation command accordingly. You can find the appropriate commands at [PyTorch's official installation page](https://pytorch.org/get-started/locally/).
+
+Visualization requires setting up the environment based on [aitviewer](https://github.com/eth-ait/aitviewer), which will require PyQT, OpenGL, etc. The configuration may depend on your os and architecture. Check their github issues if you face difficulties. 
+
+## Datasets and Models
+
+### Datasets
+
+We used several dataset sources, including AMASS, XSens Datasets (AnDY, UNIPD, Emokine, CIP, Virginia), DIP-IMU, TotalCapture. For evaluation of trained models, you can just download TotalCapture.
++ [AMASS](https://amass.is.tue.mpg.de/index.html)
++ [AnDy](https://zenodo.org/records/3254403) (xsens_mvnx.zip)
++ [UNIPD](https://doi.org/10.17605/OSF.IO/YJ9Q4)  (we use all the .mvnx files in single_person folder)
++ [Emokine](https://zenodo.org/records/7821844)
++ [CIP](https://doi.org/10.5281/zenodo.5801928)  (MTwAwinda.zip)
++ [Virginia Natural Motion](https://doi.org/10.7294/2v3w-sb92)
++ [DIP-IMU](https://dip.is.tue.mpg.de)
++ [TotalCapture](https://cvssp.org/data/totalcapture)
+
+Download and extract the datasets into a `raw` folder and organize them into corresponding subdirectories as below. For XSens datasets (AnDY, UNIPD, Emokine, CIP, Virginia) keep them at XSens_MVNX.
+
+```
+pose_datasets_dir (change in path_config.py)
+├─raw
+│  ├─AMASS
+|  |  ├─ACCAD, etc.
+│  ├─DIP_IMU
+|  |  ├─s_01, etc.
+│  ├─TotalCapture
+|  |  ├─dip_smpl, gyro_mag, imu, pos_ori, vicon
+│  ├─XSens
+|  |  ├─(empty)
+│  ├─XSens_MVNX
+|  |  ├─AnDy, etc.
+└─parsed
+```
+
+### SMPL Models
+We used the smpl model, download it from [here](https://smpl.is.tue.mpg.de) and place in  `./smpl/`.
+```
+smpl
+├─SMPL_MALE.pkl
+```
+
+## Data Processing
+Run the script to generate parsed data.
+```bash
+python data_generation.py --fullbody
+```
+**Note**: generating synthetic data of full body IMU requires a huge storage space (~8 TB). You can choose to `dataset_file_limit` to test with a smaller data size, or edit the code to generate at run time. If you don't want to train IMUCoCo model, you can generate without the `--fullbody` flag.
+
+<!-- ## Evaluation of Downstream Tasks
+**Note**: You do not need `--fullbody`` data to perform training or evaluation of these tasks.
+### Evaluating Human Pose Estimation
+To evaluate:
+```python
+python evaluate_imucoco_hpe.py
+```
+To train:
+```python
+python evaluate_imucoco_hpe.py --train
+``` -->
+<!-- ### Evaluating Human Activity Recognition
+To evaluate:
+```python
+python evaluate_imucoco_har.py
+```
+To train:
+```python
+python evaluate_imucoco_har.py --train
+``` -->
+
+## Train IMUCoCo Model
+You will need the `--fullbody` data for training. We trained using a 48GB L40S GPU. You may adjust the sampling size or batch size based on your GPU specs.
+
+### End-to-End Training
+To train the IMUCoCo model end-to-end with all phases, simplify run.
+```python
+python train_imucoco.py
+```
+
+### Individual Training Phases
+The training process consists of three main steps:
+
+- Phase 1: The model learns to predict pose and kinematics from virtual IMU data placed at joint locations to warm up the model quickly.
+- Generate z_ref Cache: The model generates joint feature cache to serve as reference targets for Phase 2 training.
+- Phase 2: The model learns to map a large amount of sampled virtual IMU data from the body mesh to joint features. 
+
+You may use the following options to control the training of the individual phases.
+- `--no_phase1`: Skip Phase 1 training (default: False)
+- `--no_phase2`: Skip Phase 2 training (default: False)
+- `--no_generate_z_ref`: Skip z_ref cache generation (default: False)
+- `--exp_id`: Experiment ID number (default: 1)
+
+## Repository Timeline
+
+### ✅ Currently Available
+- **Data Processing Pipeline**: Data generation and preprocessing for multiple pose and IMU datasets
+- **IMUCoCo Model Training**: Full implementation of the IMUCoCo model with training scripts
+
+### 📅 Coming Soon
+- **Pretrained IMUCoCo**: Downloadable checkpoints of our trained model, ready to use for downstream tasks.
+- **Downstream Evaluation**: Training and evaluation pipeline for pose estimation and activity recognition tasks
+<!-- - **Live Demo**: Real-time pose estimation demo of flexible IMU placement with visualization and data streaming tools
+- **IMUCoCo Dataset**: Processed IMUCoCo's custom dataset with dataloaders -->
+
+## Acknowledgement
+
+The code repository and our model implementation has referred to several related works. We greatly appreciate the efforts in open-sourcing code from the authors of the follow amazing works:
++ [DynaIP](https://github.com/dx118/dynaip) <!-- MIT -->
++ [PNP](https://github.com/Xinyu-Yi/PNP), [TransPose](https://github.com/Xinyu-Yi/TransPose), [PIP](https://github.com/Xinyu-Yi/PIP)  <!--GPL-3.0-->
++ [MobilePoser](https://github.com/SPICExLAB/MobilePoser) <!-- CC NC SA 4.0 -->
++ [IMUPoser](https://github.com/FIGLAB/IMUPoser) <!-- NC Custom-->
++ [ST-GCN](https://github.com/yysijie/st-gcn) <!-- BSD-2-Clause-->
+
+## Citation
+
+If you find this project helpful, please consider citing us:
+
+```
+@inproceedings{zhou2025imucoco,
+  title={IMUCoCo: Enabling Flexible On-Body IMU Placement for Human Pose Estimation and Activity Recognition},
+  author={Zhou, Haozhe and Arakawa, Riku and Agarwal, Yuvraj and Goel, Mayank},
+  booktitle={Proceedings of the 38th Annual ACM Symposium on User Interface Software and Technology},
+  pages={1--16},
+  year={2025},
+  publisher={ACM},
+  doi={10.1145/3746059.3747695}
+}
+```
+
+## LICENSE
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0). See the [LICENSE](LICENSE) file for details.
+
+**Note**: This project incorporates code from several open-source projects. Please refer to the [Acknowledgement](#acknowledgement) section for details and ensure compliance with their respective licenses.

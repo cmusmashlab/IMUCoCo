@@ -107,7 +107,7 @@ Download the required checkpoints (or supply your own) and update `path_config.p
   <img src="pics/visualizer.png" alt="Live demo screenshot" width="65%">
 </p>
 
-Our live pose viewer buil aitviewer with tooling for IMU attachment management. The `IMU Controller` panel lists each device. The `~` indicator on the left shows connectivity and turns green when the device is online. Click `Attach`, then click on the avatar to place the sensor; a colored marker appears and matches the entry color in the controller. You can attach/detach as many devices as needed, but always stop inference before editing attachments.
+Our live pose viewer builds on top of aitviewer with tooling for IMU attachment management. The `IMU Controller` panel lists each device. The `~` indicator on the left shows connectivity and turns green when the device is online. Click `Attach`, then click on the avatar to place the sensor; a colored marker appears and matches the entry color in the controller. You can attach/detach as many devices as needed, but always stop inference before editing attachments.
 
 ### Live Pose Inference from Simulated IMU Data Streaming
 Ensure you have prepare at least one `--fullbody` data sample with synthetic IMUs. 
@@ -136,6 +136,7 @@ Once packets flow, the `~` indicators on the viewer should turn green. To attach
 ### Live Pose Inference from Real Commercial Mobile and Wearable Device
 Real-data inference mirrors the simulated workflow. We ship an iPhone + Apple Watch streaming app (watch must have an magnetometer). Make sure the phone/watch pair and your server/viewer machine share the same network. Device counts and UDP ports are defined near the top of `live_demo.py` and can be adjusted.
 
+**Connecting Mobile Apps to Sever and Viewer:**
 You only need two terminals (viewer + server). Follow the simulated-data instructions but skip the live_demo_simulation_data_sender. After the server prints the ready message, start the mobile app, pair the watch, and toggle streaming. The app UI should show ~50 FPS. By default pair #1 uses port 8001 and pair #2 uses 8002. You can easily modify the `live_demo.py` near the top if your setting is different. After the stream looks stable, tap “Create Socket” to begin sending packets; the `~` symbols for the matching devices in the viewer should turn green.
 
 Real-world devices need the following calibration steps:
@@ -157,7 +158,7 @@ Tested on macOS (M1 Max) and Ubuntu 22.04 + NVIDIA GPU. Each platform needs slig
 To evaluate downstream tasks, you need a trained IMUCoCo model and its loss map. You may download our pretrained model and loss map.
 
 
-### Human Pose Estimation (HPE)
+### Human Pose Estimation
 To evaluate, you will only need the TotalCapture dataset processed.
 The `evaluate_imucoco_hpe.py` script handles both the training and evaluation of the pose estimation model. 
 

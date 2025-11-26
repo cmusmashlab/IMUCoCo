@@ -6,8 +6,9 @@ parsed_pose_dataset_dir = pose_datasets_dir + 'work/'
 
 # model checkpoint paths
 saved_imucoco_checkpoint_path = "saved_checkpoints/imucoco_best.pth"
-saved_har_checkpoint_path = "saved_checkpoints/activity_model_best.pth"
-saved_hpe_checkpoint_dir_path = "saved_checkpoints/hpe_model_best/"
+saved_imucoco_loss_map_path = "saved_checkpoints/all_error_loss_map.pth"
+saved_hpe_checkpoint_path = "saved_checkpoints/poser_dtp_best.pth"
+saved_har_checkpoint_dir_path = "saved_checkpoints/har_model_best/"
 
 # others
 exp_out_dir = "exp_out/"

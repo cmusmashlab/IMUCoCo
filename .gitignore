@@ -36,9 +36,33 @@ smpl/
 *.ini
 *.json
 error.log
-vertex_sampling_distribution_analysis.json
 
 # Data directories (users should set these up themselves)
 # raw/
 # parsed/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

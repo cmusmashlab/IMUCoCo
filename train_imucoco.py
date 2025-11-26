@@ -392,7 +392,7 @@ def train_phase2(imucoco, logger, device, save_dir, vertex_coordinates_with_cate
                                         k_gt=(joint_vel, joint_vel[:, :, 0], joint_pos, joint_glb_ori, gt_pose_local), 
                                         pose_gt=joint_glb_ori,
                                         imu_inputs_mesh_masks=train_vertices_masks, tran_mask=tran_mask,
-                                        train=True)
+                                        train=False)
 
 
             step_loss = total_loss_step

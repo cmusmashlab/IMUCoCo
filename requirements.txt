@@ -60,6 +60,7 @@ pyrr==0.10.3
 roma==1.5.3
 imageio==2.37.0
 tifffile==2025.5.10
+pygame==2.6.1
 
 # Note: PyTorch, torchvision, and torchaudio should be installed separately
 # using the commands in the README to ensure CUDA compatibility

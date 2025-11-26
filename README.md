@@ -16,7 +16,18 @@
 </h4>
 </div>
 
+## Repository Status
 
+### ✅ Currently Available
+- **Real-World Live Demo**: Interative real-time pose estimation demo system supporting flexible IMU placement with data streaming tool from commercial mobile and wearable devices.
+- **IMUCoCo Model Training**: Full implementation of the IMUCoCo model with training scripts
+- **Pretrained IMUCoCo**: Downloadable checkpoints of our trained model and loss map, ready to use for downstream tasks
+- **Human Pose Estimation** Training and evaluation code for HPE task and trained HPE model checkpoint
+- **Data Processing and IMU Synthesis**: Data generation and preprocessing for multiple pose and IMU datasets with full-body IMU data synthesis
+
+### 📅 Coming Soon
+- **Human Activity Recognition**: Training and evaluation pipeline activity recognition tasks with IMUCoCo
+- **IMUCoCo Dataset**: Human pose dataset with densely placed commercial IMUs. Processed IMUCoCo's custom dataset with dataloaders
 
 ## Environment Setup
 
@@ -32,6 +43,15 @@ pip install -r requirements.txt
 **Note**: The PyTorch installation above is for CUDA 12.8. If you have a different CUDA version, please adjust the PyTorch installation command accordingly. You can find the appropriate commands at [PyTorch's official installation page](https://pytorch.org/get-started/locally/).
 
 Visualization requires setting up the environment based on [aitviewer](https://github.com/eth-ait/aitviewer), which will require PyQT, OpenGL, etc. The configuration may depend on your os and architecture. Check their github issues if you face difficulties. 
+
+
+## Trained IMUCoCo and Related Checkpoints
+You can download our trained model checkpoints and related data here.
+- [Trained IMUCoCo Model](https://synergylabs.org/haozhe/imucoco_best.pth)
+- [Loss Map of the Trained IMUCoCo Model](https://synergylabs.org/haozhe/all_error_loss_map.pth)
+- [Trained Human Pose Estimation Model](https://synergylabs.org/haozhe/poser_dtp_best.pth)
+
+After downloading, place them into the `saved_checkpoints` directory in the root folder, or update `path_config.py` to point to them accordingly.
 
 ## Datasets and Models
 
@@ -72,24 +92,86 @@ smpl
 ├─SMPL_MALE.pkl
 ```
 
-## Data Processing
+### Data Processing
 Run the script to generate parsed data.
 ```bash
 python data_generation.py --fullbody
 ```
 **Note**: generating synthetic data of full body IMU requires a huge storage space (~8 TB). You can choose to `dataset_file_limit` to test with a smaller data size, or edit the code to generate at run time. If you don't want to train IMUCoCo model, you can generate without the `--fullbody` flag.
 
-<!-- ## Evaluation of Downstream Tasks
-**Note**: You do not need `--fullbody`` data to perform training or evaluation of these tasks.
-### Evaluating Human Pose Estimation
-To evaluate:
-```python
-python evaluate_imucoco_hpe.py
+
+## Live Demo of Human Pose Estimation with Flexible IMU Placements
+Download the required checkpoints (or supply your own) and update `path_config.py` before running any live demo.
+### GUI
+<p align="center">
+  <img src="pics/visualizer.png" alt="Live demo screenshot" width="65%">
+</p>
+
+Our live pose viewer buil aitviewer with tooling for IMU attachment management. The `IMU Controller` panel lists each device. The `~` indicator on the left shows connectivity and turns green when the device is online. Click `Attach`, then click on the avatar to place the sensor; a colored marker appears and matches the entry color in the controller. You can attach/detach as many devices as needed, but always stop inference before editing attachments.
+
+### Live Pose Inference from Simulated IMU Data Streaming
+Ensure you have prepare at least one `--fullbody` data sample with synthetic IMUs. 
+Open three terminals.
+
+**Terminal 1 – viewer**
+```bash
+python live_demo.py --viewer
 ```
-To train:
-```python
+This starts the GUI shown above. Initial slowness is normal while it tries to connect. This process manages attachments and rendering.
+
+**Terminal 2 – server**
+```bash
+python live_demo.py
+```
+This is the motion server: it receives IMU packets, runs IMUCoCo + the pose model, and streams results back. When you see `Inference loop ready, waiting for INFERENCE_ON event...`, it is ready.
+
+**Terminal 3 – IMU simulator**
+```bash
+python live_demo_simulation_data_sender.py
+```
+This streams the simulated IMU data. It also listens for attachment changes so each device follows its placement selected on the viewer. 
+
+Once packets flow, the `~` indicators on the viewer should turn green. To attach any number of devices, simply click `Attach` and point on the avatart. Click `Start Inference` to see the live pose estimation. To change placements, hit `Stop Inference`, detach, and reattach. Different layouts highlight different body regions—for instance, two leg IMUs excel at gait but give limited upper-body fidelity.
+
+### Live Pose Inference from Real Commercial Mobile and Wearable Device
+Real-data inference mirrors the simulated workflow. We ship an iPhone + Apple Watch streaming app (watch must have an magnetometer). Make sure the phone/watch pair and your server/viewer machine share the same network. Device counts and UDP ports are defined near the top of `live_demo.py` and can be adjusted.
+
+You only need two terminals (viewer + server). Follow the simulated-data instructions but skip the live_demo_simulation_data_sender. After the server prints the ready message, start the mobile app, pair the watch, and toggle streaming. The app UI should show ~50 FPS. By default pair #1 uses port 8001 and pair #2 uses 8002. You can easily modify the `live_demo.py` near the top if your setting is different. After the stream looks stable, tap “Create Socket” to begin sending packets; the `~` symbols for the matching devices in the viewer should turn green.
+
+Real-world devices need the following calibration steps:
+
+**Floor Alignment:**
+Place every IMU flat on a table or on the floor, screens up, top edge pointing “forward” at your definition (Apple Watch crown on the right). Click the button and hold for a few seconds.
+
+**T-Pose Calibration:**
+Strap the devices on the user, attach them in the viewer (the avatar is not mirrored), ask the user to face the same “forward” direction and hold a T-pose, then click the button.
+
+To start inference, simply click `Start Inference`. When you change attachment, you do not necessarily need to do the `Floor Alignment` again unless you experience drift. However, you should always rerun `T-Pose Calibration` for attachment changes. 
+
+### System Compatibility
+Tested on macOS (M1 Max) and Ubuntu 22.04 + NVIDIA GPU. Each platform needs slightly different GUI environment variables—review the definitions near the top of `live_demo.py` and adjust to match your setup.
+
+## Evaluation of Downstream Tasks
+**Note**: You do not need `--fullbody` data to perform training or evaluation of these tasks, but you do need parsed datasets plus the SMPL assets described above.
+
+To evaluate downstream tasks, you need a trained IMUCoCo model and its loss map. You may download our pretrained model and loss map.
+
+
+### Human Pose Estimation (HPE)
+To evaluate, you will only need the TotalCapture dataset processed.
+The `evaluate_imucoco_hpe.py` script handles both the training and evaluation of the pose estimation model. 
+
+```bash
+python evaluate_imucoco_hpe.py --test_tc 
+```
+When `--test_tc` is provided without a prior `--train` run in the same invocation, the script automatically loads the trained model from `saved_hpe_checkpoint_path` in `path_config.py`
+Results (per placement case CSVs and log files) are stored in `exp_out/hpe/imu_coco_hpe_<exp_id>_dtp/`.
+
+To train the pose estimation model, prepare your pretrained IMUCoCo model and loss map, process your AMASS, DIP-IMU, and XSens data, and update `path_config.py` accordingly. 
+```bash
 python evaluate_imucoco_hpe.py --train
-``` -->
+```
+
 <!-- ### Evaluating Human Activity Recognition
 To evaluate:
 ```python
@@ -122,17 +204,18 @@ You may use the following options to control the training of the individual phas
 - `--no_generate_z_ref`: Skip z_ref cache generation (default: False)
 - `--exp_id`: Experiment ID number (default: 1)
 
-## Repository Timeline
+### Generate IMUCoCo Loss Map
+Phase 2 training and all downstream tasks expect a precomputed IMU-to-joint loss map so that we can quickly look up the best proxy vertices. After training IMUCoCo (or when using our released checkpoint), generate the map once and point `path_config.saved_imucoco_loss_map_path` to the resulting `.pth`.
 
-### ✅ Currently Available
-- **Data Processing Pipeline**: Data generation and preprocessing for multiple pose and IMU datasets
-- **IMUCoCo Model Training**: Full implementation of the IMUCoCo model with training scripts
-
-### 📅 Coming Soon
-- **Pretrained IMUCoCo**: Downloadable checkpoints of our trained model, ready to use for downstream tasks.
-- **Downstream Evaluation**: Training and evaluation pipeline for pose estimation and activity recognition tasks
-<!-- - **Live Demo**: Real-time pose estimation demo of flexible IMU placement with visualization and data streaming tools
-- **IMUCoCo Dataset**: Processed IMUCoCo's custom dataset with dataloaders -->
+```bash
+python generate_imucoco_loss_map.py \
+  --checkpoint_path saved_checkpoints/imucoco_best.pth \
+  --dataset_path /path/to/pose_datasets \
+  --num_samples 1000 \
+  --save_dir exp_out/imu_coco_loss_map
+```
+Increase `--num_samples` to use more motion sequences to compute the loss map, but more samples lead to slower computation.
+The script saves per-error heatmaps in `exp_out/imu_coco_loss_map/err_map/` and writes `all_error_loss_map.pth`. Update `path_config.saved_imucoco_loss_map_path` to point at this file before running Phase 2 or downstream tasks.
 
 ## Acknowledgement
 

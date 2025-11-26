@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.func import functional_call
 from torch._functorch.functional_call import stack_module_state
+import copy
 
 """
 We used below LSTM layers for online implementation with parallelization over joint nodes,
@@ -96,7 +97,7 @@ class MotionFeatureEncoder(nn.Module):
         return x
 
     def _forward_online(self, x, h=None):
-        assert self.mode == 'online', "mode set the flag to be 'online' to use online mode"
+        assert self.online_mode, "mode set the flag to be 'online' to use online mode"
         batch_size, T, D, n_channel = x.shape
         if h is None:
             h = self.init_hidden(batch_size * D, device=x.device)
@@ -251,14 +252,14 @@ class JointNodeModulator(nn.Module):
         return feat_m2j
 
     def _forward_online(self, feat_m, placement_codes, h=None):
-        assert self.mode == 'online', "mode must be set to 'online'"
+        assert self.online_mode, "mode must be set to 'online'"
 
         batch_size, T, D, n_feat = feat_m.shape
         assert D == 1, "Online mode expects D=1. That is you should only pass signal from 1 device to each joint node"
 
         feat_m2j = feat_m.permute(0, 2, 1, 3).reshape(batch_size * D, T, n_feat)
         if h is None:
-            h = self.init_hidden_online(batch_size * D, device=feat_m2j.device)
+            h = self.init_hidden(batch_size * D, device=feat_m2j.device)
 
         new_h = []
         for layer_idx, rnn in enumerate(self.rnn_layers):
@@ -392,7 +393,7 @@ class IMUCoCo(nn.Module):
         self.joint_node_allocation_map = joint_node_allocation_map  # 'glb_ori_err' or 'distance'
         if self.joint_node_allocation_map is not None:
             mesh_transfer_loss = torch.load(joint_node_allocation_map, map_location=torch.device('cpu'), weights_only=True)
-            self.register_buffer("mesh_transfer_loss", mesh_transfer_loss)
+            self.register_buffer('mesh_transfer_loss', mesh_transfer_loss)
 
         self.joint_node_max_err_tolerance = joint_node_max_err_tolerance
         self.nodes_over_error_thres = []
@@ -711,15 +712,21 @@ class IMUCoCo(nn.Module):
     def set_current_device_coordinates(self, updated_device_coordinates):
         if len(self.current_device_coordinates) != len(updated_device_coordinates):
             # we are using a different number of devices, so we need to reset the current device coordinates to have a different shape
-            self.current_device_coordinates = torch.zeros((len(updated_device_coordinates), 4), dtype=torch.float, requires_grad=False)
+            self.current_device_coordinates = torch.zeros((len(updated_device_coordinates), 4), dtype=torch.float, requires_grad=False).to(updated_device_coordinates.device)
         if updated_device_coordinates.shape[1] == 4:    # if the provided coordinates are already have the category dimension
             self.current_device_coordinates = updated_device_coordinates
         else:   # if the provided coordinates do not have the category dimension, assign the numerical parts only
             self.current_device_coordinates[:, 1:] = updated_device_coordinates
         self.__update_min_loss_device_mapping()
 
-    def buffer_placement_codes_with_current_devices(self):
-        self.placement_codes_buffered = self.parallel_sce_forward(self.sce_params, self.sce_buffers, self.current_joint_node_coordinates.unsqueeze(1))[:, 0]
+    def buffer_placement_codes_with_current_devices(self, parallel=True):
+        if parallel:
+            self.placement_codes_buffered = self.parallel_sce_forward(self.sce_params, self.sce_buffers, self.current_joint_node_coordinates.unsqueeze(1))[:, 0]
+        else:
+            self.placement_codes_buffered = torch.zeros(self.n_joints, self.n_jnm_layers, 2, self.n_hidden, device=self.current_joint_node_coordinates.device)
+            for target_j in range(24):
+                pl = self.sces[target_j](self.current_joint_node_coordinates[target_j].unsqueeze(0))  # (1, n_jnm_layers, 2, n_hidden)
+                self.placement_codes_buffered[target_j] = pl[0]
 
     def __update_min_loss_device_mapping(self):
         self.nodes_over_error_thres = []
@@ -764,16 +771,15 @@ class IMUCoCo(nn.Module):
     def inference_time_forward_mesh_online(self, imu_signals, hidden_mfe=None, hidden_jnm=None):
         batch_size, T, _, _ = imu_signals.shape
         assert batch_size == 1, "only support batch size 1 for online"
-        signal_lens = torch.tensor([T] * batch_size)
         remapped_imu_signal = imu_signals[:, :, self.current_device_2_joint_mapping, :].permute(2, 0, 1, 3).unsqueeze(3)
         batch_encoded_signals = []
         batch_mfe_hidden = []
         batch_jnm_hidden = []
 
         if hidden_mfe is None:
-            hidden_mfe = self.mfes[0].init_hidden_online(batch_size, device=imu_signals.device).unsqueeze(0).repeat(self.n_joints, 1, 1, 1, 1)
+            hidden_mfe = self.mfes[0].init_hidden(batch_size, device=imu_signals.device).unsqueeze(0).repeat(self.n_joints, 1, 1, 1, 1)
         if hidden_jnm is None:
-            hidden_jnm = self.jnms[0].init_hidden_online(batch_size, device=imu_signals.device).unsqueeze(0).repeat(self.n_joints, 1, 1, 1, 1)
+            hidden_jnm = self.jnms[0].init_hidden(batch_size, device=imu_signals.device).unsqueeze(0).repeat(self.n_joints, 1, 1, 1, 1)
 
         placement_codes = self.placement_codes_buffered.unsqueeze(1)
         for i in range(batch_size):
@@ -783,7 +789,6 @@ class IMUCoCo(nn.Module):
                 self.jnm_params,
                 self.jnm_buffers,
                 remapped_imu_signal[:, i:i + 1],
-                signal_lens[i:i + 1],
                 placement_codes[:, i:i+1],
                 hidden_mfe,
                 hidden_jnm
@@ -795,7 +800,7 @@ class IMUCoCo(nn.Module):
         encoded_signals = torch.cat(batch_encoded_signals, dim=1).squeeze(3).permute(1, 2, 0, 3)
         hidden_mfe = torch.cat(batch_mfe_hidden, dim=3)
         hidden_jnm = torch.cat(batch_jnm_hidden, dim=3)
-        haencoded_signals[:, :, self.nodes_over_error_thres] = 0
+        encoded_signals[:, :, self.nodes_over_error_thres] = 0
         return encoded_signals, hidden_mfe, hidden_jnm
 
     def load_offline_state_dict_to_online_model(self, offline_state_dict):
@@ -854,4 +859,4 @@ class IMUCoCo(nn.Module):
                 continue
             else:
                 new_state_dict[k] = v
-        self.load_state_dict(new_state_dict)
+        self.load_state_dict(new_state_dict, strict=False)

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>For workout mode</string>
+    <key>NSHealthShareUsageDescription</key>
+    <string>For data collection</string>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>WKAppBundleIdentifier</key>
+            <string>smashlab.home-recording.watchkitapp</string>
+        </dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.watchkit</string>
+    </dict>
+</dict>
+</plist>

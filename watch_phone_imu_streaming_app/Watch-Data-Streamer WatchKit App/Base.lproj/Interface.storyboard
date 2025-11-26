@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder.WatchKit.Storyboard" version="3.0" toolsVersion="23727" targetRuntime="watchKit" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES" initialViewController="AgC-eL-Hgc">
+    <device id="watch38"/>
+    <dependencies>
+        <deployment identifier="watchOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBWatchKitPlugin" version="23705"/>
+    </dependencies>
+    <scenes>
+        <!--Interface Controller-->
+        <scene sceneID="aou-V4-d1y">
+            <objects>
+                <controller id="AgC-eL-Hgc" customClass="InterfaceController" customModule="Watch_Data_Streamer_WatchKit_App" customModuleProvider="target">
+                    <items>
+                        <group width="1" alignment="left" id="fSj-Qs-1rj">
+                            <items>
+                                <switch width="0.5" alignment="left" value="YES" title="🎤" id="0t0-Er-BM9">
+                                    <connections>
+                                        <action selector="switchChanged:" destination="AgC-eL-Hgc" id="nJI-Uv-mCN"/>
+                                    </connections>
+                                </switch>
+                            </items>
+                        </group>
+                        <label width="1" height="0.29999999999999999" alignment="left" text="Status" textAlignment="center" numberOfLines="0" id="RWt-jj-Zux"/>
+                        <button width="1" height="0.20000000000000001" alignment="left" title="Start" id="ZgU-hh-LAu">
+                            <connections>
+                                <action selector="startButtonPressed" destination="AgC-eL-Hgc" id="tuD-GU-p21"/>
+                            </connections>
+                        </button>
+                        <button width="1" height="0.20000000000000001" alignment="left" title="Stop" id="GcB-Hi-QKZ">
+                            <connections>
+                                <action selector="stopButtonPressed" destination="AgC-eL-Hgc" id="XwU-ka-FVg"/>
+                            </connections>
+                        </button>
+                    </items>
+                    <connections>
+                        <outlet property="audioEnableSwitch" destination="0t0-Er-BM9" id="n32-wb-Bbl"/>
+                        <outlet property="startButton" destination="ZgU-hh-LAu" id="F3N-Nk-pyc"/>
+                        <outlet property="statusLabel" destination="RWt-jj-Zux" id="k6h-MA-XnG"/>
+                        <outlet property="stopButton" destination="GcB-Hi-QKZ" id="liF-J5-oMq"/>
+                    </connections>
+                </controller>
+            </objects>
+            <point key="canvasLocation" x="-17" y="-7"/>
+        </scene>
+    </scenes>
+</document>

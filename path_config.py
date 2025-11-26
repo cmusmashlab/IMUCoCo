@@ -1,7 +1,7 @@
 # dataset paths
 pose_datasets_dir =  '/mnt/data/datasets/mocap_smpl_pose/'
 raw_pose_dataset_dir = pose_datasets_dir + 'raw/'
-parsed_pose_dataset_dir = pose_datasets_dir + 'work/'
+parsed_pose_dataset_dir = pose_datasets_dir + 'parsed/'
 
 
 # model checkpoint paths

@@ -112,7 +112,7 @@ def train(exp_id, logger):
 
     stage = 'pose'
 
-    for epoch in range(26, max_epochs):
+    for epoch in range(0, max_epochs):
         # training step
         train_loss = 0.
         poser_model.train()
@@ -279,12 +279,162 @@ def test_tc(exp_id, logger, imucoco_model=None, poser_model=None, simple=False):
     df_all_results = pd.DataFrame(all_results)
     df_all_results.to_csv(os.path.join(path_config.exp_out_dir, 'hpe', f"{pose_model_name}_{exp_id}_test_total_capture_all_results.csv"), index=False)
     df_mean_results = pd.DataFrame(all_results_mean_by_placement_case)
-    df_mean_results.to_csv(os.path.join(path_config.exp_out_dir, 'hpe', f"{pose_model_name}_{exp_id}_test_total_capture__mean_results.csv"), index=False)
+    df_mean_results.to_csv(os.path.join(path_config.exp_out_dir, 'hpe', f"{pose_model_name}_{exp_id}_test_total_capture_mean_results.csv"), index=False)
+
+
+def test_imucoco(exp_id, logger, imucoco_model=None, poser_model=None):
+    """Evaluate IMUCoCo+DTP on the IMUCoCo test set.
+
+    For each instrumentation focus (Upper / Lower / Torso) we evaluate 6 placement
+    cases:
+        1. wrist + pocket + ear (standard 3-IMU)
+        2-6. switch the focus's primary slot for a1..a5 in the same body region
+             (e.g. for Lower focus we swap pocket -> a{1..5}_lower).
+    """
+    # ---- load models (lazy: skip if caller already supplied them) ----
+    if imucoco_model is None:
+        vertex_coordinates_with_category = torch.tensor(imu_config.vertex_coordinates_with_category).float().to(device)
+        joint_coordinates_with_category = torch.tensor(imu_config.joint_coordinates_with_category).float().to(device)
+        coordinate_max, coordinate_min = (torch.max(vertex_coordinates_with_category[:, 1:], dim=0).values,
+                                          torch.min(vertex_coordinates_with_category[:, 1:], dim=0).values)
+        imucoco_model = IMUCoCo(
+            coordinate_origins=joint_coordinates_with_category,
+            coordinate_max=coordinate_max,
+            coordinate_min=coordinate_min,
+            smpl_mesh_coordinates=vertex_coordinates_with_category,
+            n_hidden=128, n_kr_hidden=32,
+            n_mfe_layers=2, n_jnm_layers=3, n_sce_freq=4, n_sce_emb=40,
+            online_mode=False,
+            joint_node_allocation_map=path_config.saved_imucoco_loss_map_path,
+            joint_node_max_err_tolerance=-1,
+        ).to(device)
+        imucoco_model.load_state_dict(torch.load(path_config.saved_imucoco_checkpoint_path, map_location=device), strict=False)
+        imucoco_model.freeze()
+        imucoco_model.eval()
+
+    if poser_model is None:
+        poser_model = Poser(joint_feature_dim=128, n_hidden=300, n_glb=40, num_layer=3,
+                            n_total_devices=24, load_tran_module=True).to(device)
+        poser_model.load_state_dict(torch.load(path_config.saved_hpe_checkpoint_path, map_location=device), strict=False)
+        poser_model.eval()
+
+    my_pose_evaluator = HPEEvaluator('smpl/SMPL_MALE.pkl', device=device, fps=60)
+    vertex_coordinates = torch.tensor(imu_config.vertex_coordinates).float().to(device)
+
+    # IMU device ordering inside each .pt file (set by data_generation.process_imucoco):
+    #   [wrist, pocket, ear, a1, a2, a3, a4, a5]
+    device_index = {'wrist': 0, 'pocket': 1, 'ear': 2,
+                    'a1': 3, 'a2': 4, 'a3': 5, 'a4': 6, 'a5': 7}
+    standard_3 = ['wrist', 'pocket', 'ear']
+
+    # Per-focus configuration: which standard slot do we swap with the a-sensors.
+    focus_configs = {
+        'Upper': {'switch_idx': 0, 'region': 'upper'},
+        'Lower': {'switch_idx': 1, 'region': 'lower'},
+        'Torso': {'switch_idx': 2, 'region': 'torso'},
+    }
+
+    # Single dataloader over the whole IMUCoCo set; we filter by focus inside the loop.
+    test_dataloader = get_hpe_dataloader(
+        dataset_path=path_config.parsed_pose_dataset_dir,
+        datasets=['IMUCoCo_real_imu_position_only'],
+        device=device, batch_size=1,
+        parse_vjoints=True, parse_imu=True,
+        parse_local_pose=True, parse_global_pose=True,
+        parse_joint_vel=True, parse_joint_pos=True,
+        parse_tran=True, parse_contact=False,
+        parse_vinit=True, parse_pinit=False,
+        use_joint_asp=True, joint_attr_to_root_position=True,
+        use_kinematic_energy_sampling=False,
+        val_split=0, is_test_set=True,
+        local_pose_r6d=False, global_pose_r6d=True,
+        parse_filename=True)
+
+    all_results_by_focus = {}
+
+    for focus, cfg in focus_configs.items():
+        logger.log_msg(f"\n{'='*50}\nTesting IMUCoCo {focus}\n{'='*50}", verbose=True)
+
+        # Build placement cases: standard + 5 swap cases.
+        cases = [list(standard_3)]
+        for ai in range(1, 6):
+            case = list(standard_3)
+            case[cfg['switch_idx']] = f"a{ai}_{cfg['region']}"
+            cases.append(case)
+
+        focus_results = []
+        for case in cases:
+            case_name = '+'.join(case)
+            logger.log_msg(f"\n  Case: {case_name}", verbose=True)
+            case_device_indices = [device_index[name.split('_')[0]] for name in case]
+
+            case_all_results = []
+            for batch_data in tqdm(test_dataloader, desc=case_name):
+                # Skip files that don't belong to this focus. The dataloader already
+                # exposes the focus as 'imucoco_focus' so we use that directly.
+                sample_focus = batch_data.get('imucoco_focus', [None])[0]
+                if sample_focus != cfg['region']:
+                    continue
+
+                # Look up vertex ids using the dominant hand the dataloader provides.
+                dominant = batch_data.get('imucoco_dominant_hand', ['right'])[0]
+                vids_dict = (imu_config.imucoco_right_dominant_person_3_standard_vids
+                             if dominant == 'right'
+                             else imu_config.imucoco_left_dominant_person_3_standard_vids)
+                case_vertex_ids = [vids_dict[name] for name in case]
+
+                gt_pose_glb_r6d = batch_data['pose_global'].to(device=device, non_blocking=True)
+                gt_pose_local = batch_data['pose_local'].to(device=device, non_blocking=True)
+                b_imu_data = batch_data['imu'].to(device=device, non_blocking=True)
+                vel_init = batch_data['velocity_init'].to(device=device, non_blocking=True)
+                seq_len = batch_data['sequence_lengths']
+                tran_gt = batch_data['tran'].to(device=device, non_blocking=True)
+
+                # Select IMU devices for this case.
+                b_imu_data = b_imu_data[:, :, case_device_indices]
+
+                # Tell IMUCoCo which mesh vertices the IMUs are attached to.
+                real_imu_coordinates = vertex_coordinates[case_vertex_ids]
+                imucoco_model.set_current_device_coordinates(real_imu_coordinates)
+                imucoco_model.buffer_placement_codes_with_current_devices(parallel=False)
+
+                feat_m = imucoco_model.inference_time_forward_mesh(b_imu_data)
+                glb_pose_pred, _, tran_out = poser_model.forward(
+                    x=feat_m, v_init=vel_init, glb_init=gt_pose_glb_r6d[:, 0],
+                    seq_len=seq_len, compute_tran='transpose')
+
+                result_b = my_pose_evaluator(
+                    pose_p=glb_pose_pred[0], pose_t=gt_pose_local[0],
+                    shape_p=None, shape_t=None,
+                    tran_p=tran_out, tran_t=tran_gt[0],
+                    instrumented_arm=None, instrumented_leg=None,
+                    is_predicted_pose_local=False, is_pose_p_r6d=False, is_pose_t_r6d=False)
+                case_all_results.append(result_b)
+
+            if case_all_results:
+                case_mean = compute_mean_results_by_placement(case_all_results)
+                case_mean['case'] = case_name
+                case_mean['focus'] = focus
+                focus_results.append(case_mean)
+                logger.log_msg(f"  Result: {case_mean}", verbose=True)
+
+        all_results_by_focus[focus] = focus_results
+
+    # Save aggregate results.
+    all_mean_results = [r for results in all_results_by_focus.values() for r in results]
+    df = pd.DataFrame(all_mean_results)
+    out_path = os.path.join(path_config.exp_out_dir, 'hpe',
+                            f"{pose_model_name}_{exp_id}_test_imucoco_results.csv")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    df.to_csv(out_path, index=False)
+    logger.log_msg(f"\nSaved IMUCoCo results to {out_path}", verbose=True)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="IMUCoCo HPE training and testing script")
     parser.add_argument('--train', action='store_true', help='Run training')
     parser.add_argument('--test_tc', action='store_true', help='Run TotalCapture testing')
+    parser.add_argument('--test_imucoco', action='store_true', help='Run IMUCoCo testing')
     parser.add_argument('--exp_id', type=str, required=False, default=1, help='Experiment ID')
 
     args = parser.parse_args()
@@ -294,3 +444,5 @@ if __name__ == '__main__':
         imucoco_model, poser_model = train(args.exp_id, logger)
     if args.test_tc:
         test_tc(args.exp_id, logger, imucoco_model, poser_model)
+    if args.test_imucoco:
+        test_imucoco(args.exp_id, logger, imucoco_model, poser_model)

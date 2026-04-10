@@ -1,3 +1,4 @@
+import csv
 import os
 import glob
 from datetime import datetime
@@ -12,6 +13,37 @@ from tqdm import tqdm
 
 from utils import imu_config
 import path_config
+
+
+def _load_imucoco_participant_info():
+    """Return a dict mapping participant_id (e.g. 'P01') -> dominant hand string ('right'/'left').
+
+    The CSV is part of the IMUCoCo public release. If it is missing we return an empty
+    dict and fall back to right-handed defaults at the call site.
+    """
+    info = {}
+    info_path = os.path.join(path_config.raw_pose_dataset_dir, 'IMUCoCo', 'participant_info.csv')
+    if os.path.exists(info_path):
+        with open(info_path) as f:
+            for row in csv.DictReader(f):
+                info[row['participant_id']] = row['dominant_hand']
+    return info
+
+
+# IMUCoCo filenames look like 'IMUCoCo_P01_Upper_Walking.pt'.
+def _imucoco_focus_from_filename(file_basename: str) -> str:
+    """Return the focus region ('upper' / 'lower' / 'torso') from an IMUCoCo .pt filename."""
+    if '_Upper_' in file_basename: return 'upper'
+    if '_Lower_' in file_basename: return 'lower'
+    if '_Torso_' in file_basename: return 'torso'
+    return 'upper'
+
+
+def _imucoco_pid_from_filename(file_basename: str) -> str:
+    """Return the participant id ('P01' / 'P02' / ...) from an IMUCoCo .pt filename."""
+    parts = file_basename.split('_')
+    # parts[0] == 'IMUCoCo', parts[1] == 'P01'
+    return parts[1] if len(parts) >= 2 else ''
 
 
 def collate_fn(batch):
@@ -55,6 +87,11 @@ def collate_fn(batch):
 
     if any('filename' in sample for sample in batch):
         batched_data['filename'] = [sample['filename'] for sample in batch]
+
+    # IMUCoCo per-sample metadata (string lists, no stacking).
+    for key in ('imucoco_pid', 'imucoco_focus', 'imucoco_dominant_hand'):
+        if any(key in sample for sample in batch):
+            batched_data[key] = [sample[key] for sample in batch]
 
 
     batched_data['sequence_lengths'] = torch.tensor([sample['sequence_lengths'] for sample in batch]).long()
@@ -130,6 +167,11 @@ class PoseDataset(Dataset):
 
         self.totalcapture_sensor_vertex_ids = (-1) * torch.ones(17)
         self.totalcapture_sensor_vertex_ids[:len(imu_config.tc_sensor_vertex_ids.values())] = torch.tensor(list(imu_config.tc_sensor_vertex_ids.values()))
+
+        # IMUCoCo participant info: pid -> dominant hand. Loaded once at construction so
+        # the IMUCoCo eval path can fill `imu_corresponding_vertices` and `dominant_hand`
+        # without re-reading the CSV per sample.
+        self.imucoco_participant_dominant = _load_imucoco_participant_info()
 
         self.samples = []
         self.samples_energy = []
@@ -212,31 +254,23 @@ class PoseDataset(Dataset):
                 # amass uses the same xsens sensor vertex ids
                 parsed_data['imu_corresponding_vertices'] = self.xsens_sensor_vertex_ids
             elif 'IMUCoCo' in dataset_name:
+                # IMUCoCo files are named e.g. 'IMUCoCo_P01_Upper_Walking.pt' and contain
+                # 8 IMU streams in the canonical order [wrist, pocket, ear, a1..a5]. The
+                # a1..a5 sensors physically belong to one body region (upper / lower /
+                # torso) per file, so we need the focus region to look up the right vids.
                 parsed_data['imu'] = out_data['imu']['imu'].float()
-                if 'Upper' in dataset_name and 'Right' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_upper', 'a2_upper', 'a3_upper', 'a4_upper', 'a5_upper']
-                    vertex_ids = torch.tensor([imu_config.imucoco_right_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
-                elif 'Upper' in dataset_name and 'Left' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_upper', 'a2_upper', 'a3_upper', 'a4_upper', 'a5_upper']
-                    vertex_ids = torch.tensor([imu_config.imucoco_left_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
-                elif 'Lower' in dataset_name and 'Right' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_lower', 'a2_lower', 'a3_lower', 'a4_lower', 'a5_lower']
-                    vertex_ids = torch.tensor([imu_config.imucoco_right_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
-                elif 'Lower' in dataset_name and 'Left' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_lower', 'a2_lower', 'a3_lower', 'a4_lower', 'a5_lower']
-                    vertex_ids = torch.tensor([imu_config.imucoco_left_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
-                elif 'Torso' in dataset_name and 'Right' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_torso', 'a2_torso', 'a3_torso', 'a4_torso', 'a5_torso']
-                    vertex_ids = torch.tensor([imu_config.imucoco_right_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
-                elif 'Torso' in dataset_name and 'Left' in dataset_name:
-                    selected_positions = ['wrist', 'pocket', 'ear', 'a1_torso', 'a2_torso', 'a3_torso', 'a4_torso', 'a5_torso']
-                    vertex_ids = torch.tensor([imu_config.imucoco_left_dominant_person_3_standard_vids[s] for s in selected_positions])
-                    parsed_data['imu_corresponding_vertices'] = torch.tensor(vertex_ids)
+                file_basename = os.path.basename(sample['file_name'])
+                pid = _imucoco_pid_from_filename(file_basename)
+                focus_region = _imucoco_focus_from_filename(file_basename)
+                dominant = self.imucoco_participant_dominant.get(pid, 'right').lower()
+                vids_dict = (imu_config.imucoco_right_dominant_person_3_standard_vids
+                             if dominant == 'right'
+                             else imu_config.imucoco_left_dominant_person_3_standard_vids)
+                positions = ['wrist', 'pocket', 'ear'] + [f'a{i}_{focus_region}' for i in range(1, 6)]
+                parsed_data['imu_corresponding_vertices'] = torch.tensor([vids_dict[p] for p in positions])
+                parsed_data['imucoco_pid'] = pid
+                parsed_data['imucoco_focus'] = focus_region
+                parsed_data['imucoco_dominant_hand'] = dominant
             else:
                 parsed_data['imu'] = out_data['imu']['imu'].float()
             seq_attribute_names.append('imu')
@@ -400,7 +434,6 @@ def get_hpe_dataloader(dataset_path=path_config.parsed_pose_dataset_dir,
 
             if use_kinematic_energy_sampling:
                 train_energy_weights = dataset.samples_energy[train_indices]
-                # TODO: change the replacement to False seems to increase training efficiency by a lot 03/03/2025
                 sampler_train = WeightedDataSampler(train_energy_weights, num_samples=use_kinematic_energy_sampling_steps_per_epoch * batch_size, replacement=False)
                 train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, sampler=sampler_train, collate_fn=collate_fn, num_workers=workers, prefetch_factor=prefetch_factor, pin_memory=True)
             else:

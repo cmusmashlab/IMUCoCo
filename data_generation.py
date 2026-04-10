@@ -828,9 +828,191 @@ def process_amass(args):
                 return
 
 
+def process_imucoco(args):
+    """Process the IMUCoCo test dataset into training/eval-ready .pt files.
+
+    For each participant + (focus, activity) we read three .npz files produced by the
+    IMUCoCo dataset preparation pipeline:
+        {focus}_{activity}.npz                  pose_local (T,24,3,3) and trans (T,3)
+        {focus}_{activity}_imu.npz              per-device raw IMU streams
+        {focus}_{activity}_calibration_lab.npz  R_nav2model, R_bone2sensor per device
+
+    The IMU stream is calibrated into the SMPL model frame:
+        ori_glb = R_nav2model @ R_sensor2nav @ R_bone2sensor
+        acc_glb = R_nav2model @ acc_nav  -  accel_offset_model
+    The pose stream is forward-kinematic'd to obtain joint orientations, joint/vertex
+    positions, virtual-IMU readings at the acceleration sampling points, and foot-
+    ground contact probabilities.
+
+    IMUCoCo is a test-only dataset, so we save one .pt per (participant, focus, activity)
+    full clip (no segmentation) to:
+        parsed_pose_dataset_dir/IMUCoCo_real_imu_position_only/
+    along with a single meta CSV listing all clips.
+    """
+    parse_asp_joint_info = args.parse_asp_joint_info
+    parse_origin_joint_info = args.parse_origin_joint_info
+
+    imucoco_raw_dir = os.path.join(raw_pose_dataset_dir, 'IMUCoCo')
+    out_dir_real_imu_position_only = os.path.join(parsed_pose_dataset_dir, 'IMUCoCo_real_imu_position_only')
+    os.makedirs(out_dir_real_imu_position_only, exist_ok=True)
+
+    # Find all pose .npz files (each PXX/ folder contains pose, imu, and calibration files;
+    # we filter out the IMU and calibration ones so we iterate one row per activity).
+    pose_files = sorted(glob.glob(os.path.join(imucoco_raw_dir, 'P*', '*.npz')))
+    pose_files = [f for f in pose_files
+                  if not f.endswith('_imu.npz') and not f.endswith('_calibration_lab.npz')]
+
+    print(f"Found {len(pose_files)} IMUCoCo pose files")
+
+    for pose_file in tqdm(pose_files, desc="IMUCoCo"):
+        pid = os.path.basename(os.path.dirname(pose_file))  # P01, P02, ...
+        activity_name = os.path.splitext(os.path.basename(pose_file))[0]  # Upper_Walking
+        data_name = f"IMUCoCo_{pid}_{activity_name}"
+
+        # Check if already processed
+        out_path_check = os.path.join(out_dir_real_imu_position_only, f"{data_name}.pt")
+        if os.path.exists(out_path_check):
+            continue
+
+        out_data = {'joint': {'orientation': None, 'velocity': None, 'position': None,
+                              'asp_position': None, 'asp_velocity': None},
+                    'imu': {'imu': None},
+                    'vimu': {'vimu_joints': None, 'vimu_mesh': None},
+                    'gt': {'pose_local': None, 'tran': None, 'ft_contact': None}}
+
+        # Load pose
+        pose_data = np.load(pose_file)
+        pose_local = torch.tensor(pose_data['pose_local']).float()  # (T, 24, 3, 3)
+        tran = torch.tensor(pose_data['trans']).float()  # (T, 3)
+        tran = tran - tran[:1]  # relative to first frame
+
+        n_frames = pose_local.shape[0]
+        if n_frames < 30:  # absolute minimum (1 second at 30Hz / 0.5s at 60Hz)
+            print(f"  Skipping {data_name}: only {n_frames} frames")
+            continue
+
+        # Load real IMU data and calibration
+        imu_file = pose_file.replace('.npz', '_imu.npz')
+        cal_file = pose_file.replace('.npz', '_calibration_lab.npz')
+
+        if not os.path.exists(imu_file) or not os.path.exists(cal_file):
+            print(f"  Skipping {data_name}: missing IMU or calibration")
+            continue
+
+        imu_data = np.load(imu_file, allow_pickle=True)
+        cal_data = np.load(cal_file, allow_pickle=True)
+
+        # Calibration constants. R_nav2model and accel_offset_model are shared across all
+        # devices in this recording (they describe the world↔model frame transform measured
+        # at the wrist during the lab T-pose); R_bone2sensor is per device.
+        R_nav2model = torch.tensor(cal_data['R_nav2model']).float()
+        accel_offset_model = torch.tensor(cal_data['accel_offset_model']).float() \
+            if 'accel_offset_model' in cal_data.files else torch.zeros(3)
+
+        devices = list(imu_data['devices'])
+        n_imu_frames = int(imu_data['n_frames'])
+        n_devices = len(devices)
+
+        # Align IMU and pose to the shorter of the two streams.
+        T = min(n_frames, n_imu_frames)
+
+        imu_ori = torch.zeros(T, n_devices, 3, 3)
+        imu_acc = torch.zeros(T, n_devices, 3)
+
+        for di, dev in enumerate(devices):
+            key_q = f'{dev}_quaternion'
+            key_a = f'{dev}_user_acceleration'
+            key_rb = f'{dev}_R_bone2sensor'
+
+            if key_q not in imu_data or key_rb not in cal_data:
+                continue
+
+            quat = torch.tensor(imu_data[key_q][:T]).float()  # (T, 4) wxyz
+            acc = torch.tensor(imu_data[key_a][:T]).float()    # (T, 3) user acceleration (no gravity)
+
+            # R_sensor2nav from quaternion
+            w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+            R_s2n = torch.zeros(T, 3, 3)
+            R_s2n[:, 0, 0] = 1-2*(y*y+z*z); R_s2n[:, 0, 1] = 2*(x*y-w*z); R_s2n[:, 0, 2] = 2*(x*z+w*y)
+            R_s2n[:, 1, 0] = 2*(x*y+w*z); R_s2n[:, 1, 1] = 1-2*(x*x+z*z); R_s2n[:, 1, 2] = 2*(y*z-w*x)
+            R_s2n[:, 2, 0] = 2*(x*z-w*y); R_s2n[:, 2, 1] = 2*(y*z+w*x); R_s2n[:, 2, 2] = 1-2*(x*x+y*y)
+
+            R_b2s = torch.tensor(cal_data[key_rb]).float()  # (3, 3)
+
+            # ori_glb = R_nav2model @ R_sensor2nav @ R_bone2sensor
+            imu_ori[:, di] = R_nav2model @ R_s2n @ R_b2s
+
+            # acc_glb = R_nav2model @ acc_nav - accel_offset_model
+            imu_acc[:, di] = (R_nav2model @ acc[:, :, None]).squeeze(-1) - accel_offset_model
+
+        # Format: orientation as 6D (first 2 rows of rotmat) + acceleration = 9D per device
+        ori_6d = imu_ori[:, :, :, :2].transpose(2, 3).flatten(2)  # (T, n_devices, 6)
+        imu = torch.cat([ori_6d, imu_acc], dim=-1)  # (T, n_devices, 9)
+        out_data['imu']['imu'] = imu[:T]
+
+        # Truncate pose to match
+        pose_local = pose_local[:T]
+        tran = tran[:T]
+
+        # Forward kinematics
+        glb_pose, gt_joints_positions, gt_vertex_positions = body_model.forward_kinematics(
+            pose=pose_local, tran=tran, calc_mesh=True)
+
+        out_data['joint']['orientation'] = glb_pose
+        if parse_origin_joint_info:
+            joint_velocity = (gt_joints_positions[1:] - gt_joints_positions[:-1]) * 60
+            joint_velocity = torch.cat((joint_velocity, joint_velocity[-1].unsqueeze(0)), 0)
+            out_data['joint']['position'] = gt_joints_positions
+            out_data['joint']['velocity'] = joint_velocity
+
+        # Synthetic per-joint IMU at the acceleration sampling points (used by some
+        # downstream evaluation utilities). vimu_mesh is left as None — IMUCoCo only
+        # uses real IMUs at test time, so we don't need full-mesh virtual IMU.
+        joint_acc_positions = torch.cat(
+            [gt_joints_positions, gt_vertex_positions[:, smpl_joints_sample_acc_points_mesh]], dim=1
+        )[:, smpl_joints_sample_acc_points]
+        vacc = _syn_acc(joint_acc_positions)
+        vori = glb_pose.view(-1, 24, 3, 3)[:, :, :, :2].transpose(2, 3).flatten(2)
+        vimu_joints = torch.cat([vori, vacc], dim=-1)
+        out_data['vimu']['vimu_joints'] = vimu_joints
+
+        if parse_asp_joint_info:
+            vvel = (joint_acc_positions[1:] - joint_acc_positions[:-1]) * 60
+            vvel = torch.cat((vvel, vvel[-1].unsqueeze(0)), 0)
+            out_data['joint']['asp_position'] = joint_acc_positions
+            out_data['joint']['asp_velocity'] = vvel
+
+        out_data['vimu']['vimu_mesh'] = None
+
+        out_data['gt']['pose_local'] = pose_local
+        out_data['gt']['tran'] = tran
+        out_data['gt']['ft_contact'] = _foot_ground_probs(gt_joints_positions)
+
+        __assert_equal_len(out_data, parse_asp_joint_info, parse_origin_joint_info)
+
+        # IMUCoCo is a test-only dataset — save the full activity clip (no segmentation)
+        # and append a single row to the dataset-level meta CSV.
+        meta_csv_file = os.path.join(parsed_pose_dataset_dir, 'IMUCoCo_real_imu_position_only.csv')
+        file_name = f"{data_name}.pt"
+        torch.save(out_data, os.path.join(out_dir_real_imu_position_only, file_name))
+        ek = __kinematic_energy(out_data['joint']['asp_velocity']) if parse_asp_joint_info else (
+            __kinematic_energy(out_data['joint']['velocity']) if parse_origin_joint_info else 0)
+        meta_row = pd.DataFrame([{
+            'dataset_name': 'IMUCoCo_real_imu_position_only',
+            'file_name': file_name,
+            'length': out_data['gt']['pose_local'].shape[0],
+            'kinematic_energy': float(ek),
+        }])
+        meta_row.to_csv(meta_csv_file, index=False, mode='a',
+                        header=not os.path.exists(meta_csv_file))
+
+    print(f"IMUCoCo processing done. Output: {out_dir_real_imu_position_only}")
+
+
+
 def main(args):
     if args.extract_xsens:
-        extract_mvnx(xsens_mvnx_dataset_dir, xsens_dataset_dir) 
+        extract_mvnx(xsens_mvnx_dataset_dir, xsens_dataset_dir)
     if args.process_totalcapture:
         process_totalcapture(args)
     if args.process_dipimu:
@@ -839,6 +1021,8 @@ def main(args):
         process_amass(args)
     if args.process_xsens:
         process_xsens(args)
+    if args.process_imucoco:
+        process_imucoco(args)
 
 
 if __name__ == '__main__':
@@ -850,6 +1034,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_process_dipimu', action='store_false', dest='process_dipimu', default=True, help='Skip DIP-IMU data processing (default: True)')
     parser.add_argument('--no_process_xsens', action='store_false', dest='process_xsens', default=True, help='Skip XSens data processing (default: True)')
     parser.add_argument('--no_process_amass', action='store_false', dest='process_amass', default=True, help='Skip AMASS data processing (default: True)')
+    parser.add_argument('--no_process_imucoco', action='store_false', dest='process_imucoco', default=True, help='Skip IMUCoCo data processing (default: True)')
     parser.add_argument('--no_parse_asp_joint_info', action='store_false', dest='parse_asp_joint_info', default=True, help='Skip parsing acceleration-sampling-points joint velocity and positions (default: True)')
     parser.add_argument('--no_parse_origin_joint_info', action='store_false', dest='parse_origin_joint_info', default=True, help="Skip parsing joint velocity and positions at the joint itself (default: True)")
     

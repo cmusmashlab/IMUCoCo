@@ -322,7 +322,7 @@ class Poser(nn.Module):
             # remove penetration
             current_root_y = 0
             for i in range(velocity.shape[0]):
-                current_foot_y = current_root_y + joint_pos_pred[0, 10:11].min().item()
+                current_foot_y = current_root_y + joint_pos_pred[i, 10:12, 1].min().item()
                 if current_foot_y + velocity[i, 1].item() <= self.floor_y:
                     velocity[i, 1] = self.floor_y - current_foot_y
                 current_root_y += velocity[i, 1].item()
@@ -424,7 +424,7 @@ class Poser(nn.Module):
             else:
                 current_root_y = current_tran[0, 1].item()
             for i in range(velocity.shape[0]):
-                current_foot_y = current_root_y + joint_pos_pred[0, 10:11].min().item()
+                current_foot_y = current_root_y + joint_pos_pred[i, 10:12, 1].min().item()
                 if current_foot_y + velocity[i, 1].item() <= self.floor_y:
                     velocity[i, 1] = self.floor_y - current_foot_y
                 current_root_y += velocity[i, 1].item()

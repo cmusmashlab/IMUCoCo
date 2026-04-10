@@ -16,18 +16,15 @@
 </h4>
 </div>
 
-## Repository Status
+## Repository Overview
 
-### ✅ Currently Available
 - **Real-World Live Demo**: Interative real-time pose estimation demo system supporting flexible IMU placement with data streaming tool from commercial mobile and wearable devices.
 - **IMUCoCo Model Training**: Full implementation of the IMUCoCo model with training scripts
-- **Pretrained IMUCoCo**: Downloadable checkpoints of our trained model and loss map, ready to use for downstream tasks
-- **Human Pose Estimation** Training and evaluation code for HPE task and trained HPE model checkpoint
-- **Data Processing and IMU Synthesis**: Data generation and preprocessing for multiple pose and IMU datasets with full-body IMU data synthesis
-
-### 📅 Coming Soon
-- **Human Activity Recognition**: Training and evaluation pipeline activity recognition tasks with IMUCoCo
-- **IMUCoCo Dataset**: Human pose dataset with densely placed commercial IMUs. Processed IMUCoCo's custom dataset with dataloaders
+- **Pretrained IMUCoCo**: Downloadable checkpoints of our trained model and loss map, ready to use for downstream tasks.
+- **Human Pose Estimation**: Training and evaluation code for HPE task and trained HPE model checkpoint.
+- **Human Activity Recognition**: Training and evaluation pipeline for HAR with ST-GCN and IMUCoCo.
+- **Data Processing and IMU Synthesis**: Data generation and preprocessing for multiple pose and IMU datasets with full-body IMU data synthesis.
+- **IMUCoCo Dataset**: Real human-pose dataset with densely placed commercial IMUs and processed dataloaders.
 
 ## Environment Setup
 
@@ -57,7 +54,7 @@ After downloading, place them into the `saved_checkpoints` directory in the root
 
 ### Datasets
 
-We used several dataset sources, including AMASS, XSens Datasets (AnDY, UNIPD, Emokine, CIP, Virginia), DIP-IMU, TotalCapture. For evaluation of trained models, you can just download TotalCapture.
+We used several dataset sources, including AMASS, XSens Datasets (AnDY, UNIPD, Emokine, CIP, Virginia), DIP-IMU, TotalCapture, and our own IMUCoCo dataset. For evaluation of trained models on TotalCapture you only need TotalCapture; for IMUCoCo HPE / HAR evaluation you only need the IMUCoCo dataset.
 + [AMASS](https://amass.is.tue.mpg.de/index.html)
 + [AnDy](https://zenodo.org/records/3254403) (xsens_mvnx.zip)
 + [UNIPD](https://doi.org/10.17605/OSF.IO/YJ9Q4)  (we use all the .mvnx files in single_person folder)
@@ -66,6 +63,7 @@ We used several dataset sources, including AMASS, XSens Datasets (AnDY, UNIPD, E
 + [Virginia Natural Motion](https://doi.org/10.7294/2v3w-sb92)
 + [DIP-IMU](https://dip.is.tue.mpg.de)
 + [TotalCapture](https://cvssp.org/data/totalcapture)
++ [IMUCoCo](https://synergylabs.org/haozhe/imucoco_dataset_12.zip)
 
 Download and extract the datasets into a `raw` folder and organize them into corresponding subdirectories as below. For XSens datasets (AnDY, UNIPD, Emokine, CIP, Virginia) keep them at XSens_MVNX.
 
@@ -82,8 +80,16 @@ pose_datasets_dir (change in path_config.py)
 |  |  ├─(empty)
 │  ├─XSens_MVNX
 |  |  ├─AnDy, etc.
-└─parsed
+│  ├─IMUCoCo
+|  |  ├─participant_info.csv
+|  |  ├─P01
+|  |  |  ├─Upper_Walking.npz, Upper_Walking_imu.npz, Upper_Walking_calibration_lab.npz, ...
+|  |  ├─P02, P03, ..., P12
+└─work
 ```
+
+#### About the IMUCoCo Dataset
+The [IMUCoCo](https://synergylabs.org/haozhe/imucoco_dataset_12.zip) release is ~200 minutes of recordings from 12 participants. Each session uses one of three focuses (Upper / Lower / Torso), eight Apple Watch placements per take (wrist, thigh pocket, ear, and five additional swap positions), and OptiTrack full-body pose with global translation.
 
 ### SMPL Models
 We used the smpl model, download it from [here](https://smpl.is.tue.mpg.de) and place in  `./smpl/`.
@@ -98,6 +104,14 @@ Run the script to generate parsed data.
 python data_generation.py --fullbody
 ```
 **Note**: generating synthetic data of full body IMU requires a huge storage space (~8 TB). You can choose to `dataset_file_limit` to test with a smaller data size, or edit the code to generate at run time. If you don't want to train IMUCoCo model, you can generate without the `--fullbody` flag.
+
+If you only want to process a subset of datasets, use the `--no_process_*` flags. For example, to process only the IMUCoCo dataset (sufficient for IMUCoCo HPE/HAR evaluation):
+```bash
+python data_generation.py \
+  --no_extract_xsens --no_process_totalcapture --no_process_dipimu \
+  --no_process_xsens --no_process_amass
+```
+This writes per-activity `.pt` files (one per participant × focus × activity, no segmentation since IMUCoCo is a test-only set) to `parsed_pose_dataset_dir/IMUCoCo_real_imu_position_only/` along with a meta CSV.
 
 
 ## Live Demo of Human Pose Estimation with Flexible IMU Placements
@@ -159,29 +173,28 @@ To evaluate downstream tasks, you need a trained IMUCoCo model and its loss map.
 
 
 ### Human Pose Estimation
-To evaluate, you will only need the TotalCapture dataset processed.
-The `evaluate_imucoco_hpe.py` script handles both the training and evaluation of the pose estimation model. 
+The `evaluate_imucoco_hpe.py` script handles both the training and evaluation of the pose estimation model.
 
+**Evaluate on TotalCapture** (only the TotalCapture dataset is required).
 ```bash
-python evaluate_imucoco_hpe.py --test_tc 
+python evaluate_imucoco_hpe.py --test_tc
 ```
-When `--test_tc` is provided without a prior `--train` run in the same invocation, the script automatically loads the trained model from `saved_hpe_checkpoint_path` in `path_config.py`
-Results (per placement case CSVs and log files) are stored in `exp_out/hpe/imu_coco_hpe_<exp_id>_dtp/`.
 
-To train the pose estimation model, prepare your pretrained IMUCoCo model and loss map, process your AMASS, DIP-IMU, and XSens data, and update `path_config.py` accordingly. 
+**Evaluate on the IMUCoCo dataset** (only the processed IMUCoCo dataset is required).
+```bash
+python evaluate_imucoco_hpe.py --test_imucoco
+```
+
+To train the pose estimation model, prepare your pretrained IMUCoCo model and loss map, process your AMASS, DIP-IMU, and XSens data, and update `path_config.py` accordingly.
 ```bash
 python evaluate_imucoco_hpe.py --train
 ```
 
-<!-- ### Evaluating Human Activity Recognition
-To evaluate:
-```python
-python evaluate_imucoco_har.py
-```
-To train:
-```python
+### Human Activity Recognition
+The `evaluate_imucoco_har.py` script trains and evaluates an activity classifier on with a pretrained IMUCoCo model. 
+```bash
 python evaluate_imucoco_har.py --train
-``` -->
+```
 
 ## Train IMUCoCo Model
 You will need the `--fullbody` data for training. We trained using a 48GB L40S GPU. You may adjust the sampling size or batch size based on your GPU specs.
